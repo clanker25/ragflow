@@ -1,0 +1,348 @@
+import { ParseDocumentType } from '@/components/layout-recognize-form-field';
+import { initialLlmBaseValues, Operator } from '@/constants/agent';
+import { FileType } from '@/constants/file';
+import { ModelTypeToField } from '@/constants/llm';
+import { cloneDeep } from 'lodash';
+
+// The audio parser defaults to the tenant's ASR model, keyed by the
+// useFetchDefaultModelDictionary fields. (The vision model is a single global
+// parser option, not per file type, so video no longer appears here.)
+export const FileTypeDefaultModelFieldMap: Partial<Record<FileType, string>> = {
+  [FileType.Audio]: ModelTypeToField.asr,
+};
+
+export enum ContextGeneratorFieldName {
+  Summary = 'summary',
+  Keywords = 'keywords',
+  Questions = 'questions',
+  Metadata = 'metadata',
+}
+
+export const FileId = 'File'; // BeginId
+
+export enum TokenizerSearchMethod {
+  Embedding = 'embedding',
+  FullText = 'full_text',
+}
+
+export enum TokenizerFields {
+  Text = 'text',
+  Questions = 'questions',
+  Summary = 'summary',
+}
+
+export enum ParserFields {
+  From = 'from',
+  To = 'to',
+  Cc = 'cc',
+  Bcc = 'bcc',
+  Date = 'date',
+  Subject = 'subject',
+  Body = 'body',
+  Attachments = 'attachments',
+}
+
+// initialBeginValues
+export const initialFileValues = {
+  outputs: {
+    name: {
+      type: 'string',
+      value: '',
+    },
+    file: {
+      type: 'Object',
+      value: {},
+    },
+  },
+};
+
+export const initialTokenizerValues = {
+  search_method: [
+    TokenizerSearchMethod.Embedding,
+    TokenizerSearchMethod.FullText,
+  ],
+  filename_embd_weight: 0.1,
+  fields: TokenizerFields.Text,
+  outputs: {},
+};
+
+export enum StringTransformMethod {
+  Merge = 'merge',
+  Split = 'split',
+}
+
+export enum StringTransformDelimiter {
+  Comma = ',',
+  Semicolon = ';',
+  Period = '.',
+  LineBreak = '\n',
+  Tab = '\t',
+  Space = ' ',
+}
+
+export const initialParserValues = {
+  // The Go Parser component emits structured JSON items only; markdown/text/
+  // html are internal backend representations, never public Parser outputs.
+  outputs: {
+    json: { type: 'Array<object>', value: [] },
+  },
+  // Global vision enhancement, off by default; the model id is prefilled from
+  // the tenant's image2text default when a node is created. The prompt and
+  // optional description language are shared by the vision paths here.
+  // Description language is empty by default: captions follow the knowledge
+  // base language, which also drives tokenization.
+  vlm: { llm_id: '', system_prompt: '', lang: '' },
+  enable_vision_enhancement: false,
+  setups: [
+    {
+      fileFormat: FileType.PDF,
+      parse_method: ParseDocumentType.DeepDOC,
+      remove_header_footer: false,
+      pages: [{ from: 1, to: 100000 }],
+    },
+    {
+      fileFormat: FileType.Spreadsheet,
+      parse_method: ParseDocumentType.DeepDOC,
+    },
+    {
+      fileFormat: FileType.Image,
+      ocr_enabled: true,
+    },
+    {
+      fileFormat: FileType.Email,
+      fields: Object.values(ParserFields),
+    },
+    {
+      fileFormat: FileType.TextMarkdown,
+      remove_toc: false,
+    },
+    {
+      fileFormat: FileType.Code,
+    },
+    {
+      fileFormat: FileType.Html,
+      remove_header_footer: false,
+    },
+    {
+      fileFormat: FileType.Doc,
+      remove_header_footer: false,
+    },
+    {
+      fileFormat: FileType.Docx,
+      remove_header_footer: false,
+    },
+    {
+      fileFormat: FileType.PowerPoint,
+      parse_method: ParseDocumentType.DeepDOC,
+    },
+    // {
+    //   fileFormat: FileType.Video,
+    // },
+    {
+      fileFormat: FileType.Audio,
+      vlm: { llm_id: '' },
+    },
+  ],
+};
+
+export const initialTokenChunkerValues = {
+  outputs: {
+    chunks: { type: 'Array<Object>', value: [] },
+  },
+  delimiter_mode: 'delimiter',
+  chunk_token_size: 512,
+  overlapped_percent: 0,
+  delimiters: [
+    { value: '\n' },
+    { value: '!' },
+    { value: '?' },
+    { value: ';' },
+    { value: '。' },
+    { value: '；' },
+    { value: '！' },
+    { value: '？' },
+  ],
+  image_table_context_window: 0,
+  enable_children: false,
+  children_delimiters: [],
+};
+
+export const initialGeneralChunkerValues = {
+  outputs: {
+    chunks: { type: 'Array<Object>', value: [] },
+  },
+  chunk_token_size: 512,
+  overlapped_percent: 0,
+  delimiters: [
+    { value: '\n' },
+    { value: '!' },
+    { value: '?' },
+    { value: ';' },
+    { value: '。' },
+    { value: '；' },
+    { value: '！' },
+    { value: '？' },
+  ],
+  table_context_size: 0,
+  image_context_size: 0,
+  enable_children: false,
+  children_delimiters: [],
+};
+
+export enum Hierarchy {
+  H1 = '1',
+  H2 = '2',
+  H3 = '3',
+  H4 = '4',
+  H5 = '5',
+}
+
+export enum TitleChunkerMethod {
+  Hierarchy = 'hierarchy',
+  Group = 'group',
+}
+export const originalRules = [
+  {
+    // levels: [
+    //   { expression: '^#[^#]' },
+    //   { expression: '^##[^#]' },
+    //   { expression: '^###[^#]' },
+    //   { expression: '^####[^#]' },
+    // ],
+    levels: [
+      { expression: '^#[^#]' },
+      { expression: '^##[^#]' },
+      { expression: '^###[^#]' },
+      { expression: '^####[^#]' },
+    ],
+  },
+  {
+    levels: [
+      { expression: '第[零一二三四五六七八九十百0-9]+(分?编|部分)' },
+      { expression: '第[零一二三四五六七八九十百0-9]+章' },
+      { expression: '第[零一二三四五六七八九十百0-9]+节' },
+      { expression: '第[零一二三四五六七八九十百0-9]+条' },
+      { expression: '[\\(（][零一二三四五六七八九十百]+[\\)）]' },
+    ],
+  },
+  {
+    levels: [
+      { expression: '第[0-9]+章' },
+      { expression: '第[0-9]+节' },
+      { expression: '[0-9]{1,2}[\\. 、]' },
+      { expression: '[0-9]{1,2}\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])' },
+      { expression: '[0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{1,2}' },
+    ],
+  },
+  {
+    levels: [
+      { expression: '第[零一二三四五六七八九十百0-9]+章' },
+      { expression: '第[零一二三四五六七八九十百0-9]+节' },
+      { expression: '[零一二三四五六七八九十百]+[ 、]' },
+      { expression: '[\\(（][零一二三四五六七八九十百]+[\\)）]' },
+      { expression: '[\\(（][0-9]{,2}[\\)）]' },
+    ],
+  },
+  {
+    levels: [
+      {
+        expression: 'PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)',
+      },
+      { expression: 'Chapter (I+V?|VI*|XI|IX|X)' },
+      { expression: 'Section [0-9]+' },
+      { expression: 'Article [0-9]+' },
+    ],
+  },
+];
+
+export const initialTitleChunkerValues = {
+  outputs: {
+    chunks: { type: 'Array<Object>', value: [] },
+  },
+  method: TitleChunkerMethod.Hierarchy,
+  hierarchyHierarchy: Hierarchy.H3,
+  hierarchyGroup: '0',
+  include_heading_content: false,
+  root_chunk_as_heading: false,
+  table_context_size: 0,
+  image_context_size: 0,
+  hierarchyChunkTokenCap: 512,
+  groupChunkTokenCap: 512,
+  hierarchyRules: cloneDeep(originalRules),
+  groupRules: cloneDeep(originalRules),
+};
+
+// Defaults for the extractor: the LLM settings plus the nested per-feature
+// groups the Go schema reads (schema.ExtractorParam).
+export const initialExtractorValues = {
+  ...initialLlmBaseValues,
+  keywords: {
+    enabled: false,
+    top_n: 0,
+    system_prompt: '',
+  },
+  questions: {
+    enabled: false,
+    top_n: 0,
+    system_prompt: '',
+  },
+  tags: {
+    enabled: false,
+    top_n: 0,
+    tag_file_id: '',
+  },
+  summary: {
+    enabled: false,
+    system_prompt: '',
+  },
+  metadata: {
+    enabled: false,
+    metadata: [],
+    built_in_metadata: [],
+  },
+  outputs: {
+    chunks: { type: 'Array<Object>', value: [] },
+  },
+};
+
+export function getInitialExtractorValues() {
+  return initialExtractorValues;
+}
+
+export const initialCompilationValues = {
+  ...initialLlmBaseValues,
+  compilation_template_group_id: '',
+  llm_id: '',
+  outputs: {
+    chunks: { type: 'Array<Object>', value: [] },
+  },
+};
+
+export const NoDebugOperatorsList = [Operator.File];
+
+// Chunker operators available on the Go pipeline canvas. GeneralChunker is a
+// legacy Python operator and is deliberately excluded.
+export const ChunkerOperators = [Operator.TokenChunker, Operator.TitleChunker];
+
+// Operators offered in the flat top-level list of the pipeline "next step"
+// menu, distinct from the chunker group. Single-instance filtering happens
+// per entry in buildPipelineNextOperators.
+export const TopLevelOperators = [
+  Operator.Parser,
+  Operator.Tokenizer,
+  Operator.Compiler,
+  Operator.Extractor,
+];
+
+// Pipeline operators limited to a single instance per canvas. Title/Token
+// chunkers are separate entries here (each blocks its own duplication) but
+// also share one slot: see the chunker group rule in buildPipelineNextOperators.
+export const SingleOperators = [
+  Operator.Tokenizer,
+  Operator.Compiler,
+  Operator.Extractor,
+  Operator.GeneralChunker,
+  Operator.TokenChunker,
+  Operator.TitleChunker,
+  Operator.Parser,
+];
