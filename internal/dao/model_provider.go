@@ -1,0 +1,62 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
+package dao
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+
+	"go.uber.org/zap"
+
+	"ragflow/internal/common"
+	"ragflow/internal/entity/models"
+	"ragflow/internal/utility"
+)
+
+// modelProviderLoadOnce guards the fallback load for callers that run without
+// InitDB. The catalog itself is published atomically by the models package.
+var modelProviderLoadOnce sync.Once
+
+// GetModelProviderManager returns the process-wide model provider catalog.
+// The catalog is parsed from the provider JSON files under conf/models, so it
+// has no SQL backend and no connection of its own; InitDB seeds it at startup
+// and the fallback below covers callers that run without InitDB.
+func GetModelProviderManager() *models.ProviderManager {
+	if pm := models.GetProviderManager(); pm != nil {
+		return pm
+	}
+	modelProviderLoadOnce.Do(func() {
+		modelConfigDir, err := findModelConfigDir()
+		if err != nil {
+			common.Fatal("Failed to locate model providers", zap.Error(err))
+		}
+		if err = models.InitProviderManager(modelConfigDir); err != nil {
+			common.Fatal("Failed to load model providers", zap.Error(err))
+		}
+	})
+	return models.GetProviderManager()
+}
+
+func findModelConfigDir() (string, error) {
+	dir := filepath.Join(utility.ConfDir(), "models")
+	if info, err := os.Stat(dir); err == nil && info.IsDir() {
+		return dir, nil
+	}
+	return "", fmt.Errorf("model provider catalog not found under %s", dir)
+}

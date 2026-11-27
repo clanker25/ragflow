@@ -1,0 +1,198 @@
+import { CardContainer } from '@/components/card-container';
+import DuplicateDialog from '@/ee/components/duplicate-dialog';
+import { EmptyCardType } from '@/components/empty/constant';
+import { EmptyAppCard } from '@/components/empty/empty';
+import { NavGroupListFilterBar } from '@/layouts/components/nav-group-list-filter-bar';
+import { PrivilegeManagementDialog } from '@/ee/components/privilege-management/privilege-management-dialog';
+import { RenameDialog } from '@/components/rename-dialog';
+import { Button } from '@/components/ui/button';
+import { RAGFlowPagination } from '@/components/ui/ragflow-pagination';
+import { Spin } from '@/components/ui/spin';
+import { ListDeletionKey } from '@/constants/list-deletion';
+import { useGoToPreviousPageOnEmpty } from '@/hooks/logic-hooks';
+import { useFetchNextKnowledgeListByPage } from '@/hooks/use-knowledge-request';
+import { useQueryClient } from '@tanstack/react-query';
+import { pick } from 'lodash';
+import { Plus } from 'lucide-react';
+import { useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router';
+import { DatasetCard } from './dataset-card';
+import { DatasetCreatingDialog } from './dataset-creating-dialog';
+import { useSaveKnowledge } from './hooks';
+import useDuplicateDataset from '@/ee/pages/datasets/use-duplicate-dataset';
+import { useRenameDataset } from './use-rename-dataset';
+import { useSelectOwners } from './use-select-owners';
+import { useShowPrivilegeDialog } from '@/ee/pages/datasets/use-show-privilege-dialog';
+
+export default function Datasets() {
+  const { t } = useTranslation();
+  const {
+    visible,
+    hideModal,
+    showModal,
+    onCreateOk,
+    loading: creatingLoading,
+  } = useSaveKnowledge();
+
+  const {
+    kbs,
+    total_datasets,
+    pagination,
+    setPagination,
+    handleInputChange,
+    searchString,
+    setSearchString,
+    filterValue,
+    setFilterValue,
+    handleFilterSubmit,
+    loading,
+  } = useFetchNextKnowledgeListByPage();
+
+  const owners = useSelectOwners();
+
+  const {
+    datasetRenameLoading,
+    initialDatasetName,
+    onDatasetRenameOk,
+    datasetRenameVisible,
+    hideDatasetRenameModal,
+    showDatasetRenameModal,
+  } = useRenameDataset();
+
+  const {
+    isModalVisible: datasetDuplicateModalVisible,
+    showModal: showDatasetDuplicateModal,
+    hideModal: hideDatasetDuplicateModal,
+    initialName: initialDatasetDuplicateName,
+    onOk: onDatasetDuplicateOk,
+    loading: datasetDuplicateLoading,
+  } = useDuplicateDataset();
+
+  const handlePageChange = useCallback(
+    (page: number, pageSize?: number) => {
+      setPagination({ page, pageSize });
+    },
+    [setPagination],
+  );
+  useGoToPreviousPageOnEmpty(kbs?.length, loading, {
+    deletionKey: ListDeletionKey.KnowledgeList,
+    searchString,
+    setSearchString,
+    filterValue,
+    setFilterValue,
+  });
+  const [searchUrl, setSearchUrl] = useSearchParams();
+  const isCreate = searchUrl.get('isCreate') === 'true';
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (isCreate) {
+      queryClient.invalidateQueries({ queryKey: ['tenantInfo'] });
+      showModal();
+      searchUrl.delete('isCreate');
+      setSearchUrl(searchUrl);
+    }
+  }, [isCreate, showModal, searchUrl, setSearchUrl, queryClient]);
+
+  const {
+    privilegeModal,
+    hidePrivilegeModal,
+    handShowPrivilegeModal,
+    recordWithSourceType,
+  } = useShowPrivilegeDialog();
+
+  return (
+    <>
+      <article
+        className="size-full min-w-0 flex flex-col"
+        data-testid="datasets-list"
+      >
+        <header className="mb-5 min-w-0 px-5 pt-5">
+          <NavGroupListFilterBar
+            searchString={searchString}
+            onSearchChange={handleInputChange}
+            value={filterValue}
+            filters={owners}
+            onChange={handleFilterSubmit}
+          >
+            <Button
+              size="icon"
+              onClick={showModal}
+              aria-label={t('knowledgeList.createKnowledgeBase')}
+            >
+              <Plus />
+            </Button>
+          </NavGroupListFilterBar>
+        </header>
+
+        {loading && !kbs?.length ? (
+          <div className="flex flex-1 items-center justify-center">
+            <Spin size="large" />
+          </div>
+        ) : kbs?.length ? (
+          <>
+            <CardContainer className="flex-1 overflow-auto px-5">
+              {kbs.map((dataset) => (
+                <DatasetCard
+                  dataset={dataset}
+                  key={dataset.id}
+                  showDatasetRenameModal={showDatasetRenameModal}
+                  showDatasetDuplicateModal={showDatasetDuplicateModal}
+                  showPrivilegeModal={handShowPrivilegeModal(dataset)}
+                />
+              ))}
+            </CardContainer>
+
+            <footer className="mt-4 px-5 pb-5">
+              <RAGFlowPagination
+                {...pick(pagination, 'current', 'pageSize')}
+                total={total_datasets}
+                onChange={handlePageChange}
+              />
+            </footer>
+          </>
+        ) : (
+          <div className="flex-1 flex items-center justify-center">
+            <EmptyAppCard
+              showIcon
+              size="large"
+              className="w-[480px] p-14"
+              isSearch={Boolean(searchString)}
+              type={EmptyCardType.Dataset}
+              onClick={showModal}
+            />
+          </div>
+        )}
+      </article>
+      {visible && (
+        <DatasetCreatingDialog
+          hideModal={hideModal}
+          onOk={onCreateOk}
+          loading={creatingLoading}
+        ></DatasetCreatingDialog>
+      )}
+      {datasetDuplicateModalVisible && (
+        <DuplicateDialog
+          hideModal={hideDatasetDuplicateModal}
+          onOk={onDatasetDuplicateOk}
+          initialName={initialDatasetDuplicateName}
+          loading={datasetDuplicateLoading}
+        />
+      )}
+      {datasetRenameVisible && (
+        <RenameDialog
+          hideModal={hideDatasetRenameModal}
+          onOk={onDatasetRenameOk}
+          initialName={initialDatasetName}
+          loading={datasetRenameLoading}
+        ></RenameDialog>
+      )}
+      {privilegeModal && (
+        <PrivilegeManagementDialog
+          hideModal={hidePrivilegeModal}
+          initialValues={recordWithSourceType}
+        ></PrivilegeManagementDialog>
+      )}
+    </>
+  );
+}

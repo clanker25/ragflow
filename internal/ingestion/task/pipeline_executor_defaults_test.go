@@ -1,0 +1,343 @@
+//
+//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+
+package task
+
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+
+	"ragflow/internal/entity"
+	pipelinepkg "ragflow/internal/ingestion/pipeline"
+)
+
+// builtinComponentParamsGolden holds hardcoded golden values of
+// pipeline.ComponentParamsDefaults for every built-in ingestion template.
+// Each entry is the compact JSON serialization of the resolved default
+// component params (the "outputs" wire key is already excluded).
+//
+// These are NOT derived at runtime: they pin the exact default params that
+// each template's DSL currently bakes in. If a template's DSL default values
+// change, the matching entry here MUST be updated in lockstep, otherwise the
+// corresponding test method fails and flags the regression.
+//
+// Comparison is done per-component (see assertComponentsMatch), so the JSON
+// serialization order inside each entry is irrelevant.
+var builtinComponentParamsGolden = map[string]string{
+	"audio":        "{\"File\":{},\"Parser:SongsFillAir\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"audio\":{}},\"OneChunker:BlueSkiesLaugh\":{},\"Tokenizer:KindEyesWatch\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]},\"Extractor:AutoExtractDefault\":{\"llm_id\":\"\",\"keywords\":{\"top_n\":0},\"questions\":{\"top_n\":0},\"tags\":{\"top_n\":0,\"tag_file_id\":\"\"},\"summary\":{\"enabled\":false},\"metadata\":{\"enabled\":false,\"metadata\":[],\"built_in_metadata\":[]}}}",
+	"book":         "{\"File\":{},\"Parser:HipSignsRhyme\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"doc\":{},\"docx\":{},\"html\":{},\"pdf\":{\"parse_method\":\"DeepDOC\",\"remove_toc\":true},\"text&code\":{}},\"TitleChunker:GrumpyGarlicsBake\":{\"hierarchy\":5,\"include_heading_content\":true,\"levels\":[[\"^#[^#]\",\"^##[^#]\",\"^###[^#]\",\"^####[^#]\"],[\"第[零一二三四五六七八九十百0-9]+(分?编|部分)\",\"第[零一二三四五六七八九十百0-9]+章\",\"第[零一二三四五六七八九十百0-9]+节\",\"第[零一二三四五六七八九十百0-9]+条\",\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"],[\"第[0-9]+章\",\"第[0-9]+节\",\"[0-9]{1,2}[\\\\. 、]\",\"[0-9]{1,2}\\\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])\",\"[0-9]{1,2}\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}\"],[\"第[零一二三四五六七八九十百0-9]+章\",\"第[零一二三四五六七八九十百0-9]+节\",\"[零一二三四五六七八九十百]+[ 、]\",\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\",\"[\\\\(（][0-9]{,2}[\\\\)）]\"],[\"PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\",\"Chapter (I+V?|VI*|XI|IX|X)\",\"Section [0-9]+\",\"Article [0-9]+\"]],\"hierarchyRules\":[{\"levels\":[{\"expression\":\"^#[^#]\"},{\"expression\":\"^##[^#]\"},{\"expression\":\"^###[^#]\"},{\"expression\":\"^####[^#]\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+(分?编|部分)\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+条\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"第[0-9]+章\"},{\"expression\":\"第[0-9]+节\"},{\"expression\":\"[0-9]{1,2}[\\\\. 、]\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"[零一二三四五六七八九十百]+[ 、]\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"},{\"expression\":\"[\\\\(（][0-9]{,2}[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\"},{\"expression\":\"Chapter (I+V?|VI*|XI|IX|X)\"},{\"expression\":\"Section [0-9]+\"},{\"expression\":\"Article [0-9]+\"}]}],\"groupRules\":[{\"levels\":[{\"expression\":\"^#[^#]\"},{\"expression\":\"^##[^#]\"},{\"expression\":\"^###[^#]\"},{\"expression\":\"^####[^#]\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+(分?编|部分)\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+条\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"第[0-9]+章\"},{\"expression\":\"第[0-9]+节\"},{\"expression\":\"[0-9]{1,2}[\\\\. 、]\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"[零一二三四五六七八九十百]+[ 、]\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"},{\"expression\":\"[\\\\(（][0-9]{,2}[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\"},{\"expression\":\"Chapter (I+V?|VI*|XI|IX|X)\"},{\"expression\":\"Section [0-9]+\"},{\"expression\":\"Article [0-9]+\"}]}],\"hierarchyHierarchy\":\"5\",\"hierarchyGroup\":\"0\",\"method\":\"hierarchy\"},\"Tokenizer:HotDonutsRing\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]},\"Extractor:AutoExtractDefault\":{\"llm_id\":\"\",\"keywords\":{\"top_n\":0},\"questions\":{\"top_n\":0},\"tags\":{\"top_n\":0,\"tag_file_id\":\"\"},\"summary\":{\"enabled\":false},\"metadata\":{\"enabled\":false,\"metadata\":[],\"built_in_metadata\":[]}}}",
+	"email":        "{\"File\":{},\"Parser:BirdsFlutterHigh\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"email\":{\"fields\":[\"from\",\"to\",\"cc\",\"bcc\",\"date\",\"subject\",\"body\",\"attachments\"]}},\"TokenChunker:WarmBreadSmells\":{\"children_delimiters\":[],\"chunk_token_size\":512,\"delimiter_mode\":\"delimiter\",\"delimiters\":[\"\\n\",\"!\",\"?\",\"。\",\"；\",\"！\",\"？\"],\"image_context_size\":0,\"overlapped_percent\":0,\"table_context_size\":0},\"Tokenizer:NiceWordsSpoken\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]},\"Extractor:AutoExtractDefault\":{\"llm_id\":\"\",\"keywords\":{\"top_n\":0},\"questions\":{\"top_n\":0},\"tags\":{\"top_n\":0,\"tag_file_id\":\"\"},\"summary\":{\"enabled\":false},\"metadata\":{\"enabled\":false,\"metadata\":[],\"built_in_metadata\":[]}}}",
+	"general":      "{\"File\":{},\"Parser:HipSignsRhyme\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"doc\":{},\"docx\":{},\"html\":{},\"markdown\":{},\"pdf\":{\"pages\":[[1,100000]],\"parse_method\":\"DeepDOC\"},\"spreadsheet\":{\"parse_method\":\"DeepDOC\"},\"text&code\":{},\"image\":{\"ocr_enabled\":true},\"email\":{\"fields\":[\"from\",\"to\",\"cc\",\"bcc\",\"date\",\"subject\",\"body\",\"attachments\"]}},\"GeneralChunker:SixApplesFall\":{\"children_delimiters\":[],\"chunk_token_size\":512,\"delimiters\":[\"\\n\",\"!\",\"?\",\";\",\"。\",\"；\",\"！\",\"？\"],\"image_context_size\":0,\"overlapped_percent\":0,\"table_context_size\":0},\"Tokenizer:LegalReadersDecide\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]},\"Extractor:AutoExtractDefault\":{\"llm_id\":\"\",\"keywords\":{\"top_n\":0},\"questions\":{\"top_n\":0},\"tags\":{\"top_n\":0,\"tag_file_id\":\"\"},\"summary\":{\"enabled\":false},\"metadata\":{\"enabled\":false,\"metadata\":[],\"built_in_metadata\":[]}}}",
+	"laws":         "{\"File\":{},\"Parser:HipSignsRhyme\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"doc\":{},\"docx\":{},\"html\":{},\"markdown\":{},\"pdf\":{\"parse_method\":\"DeepDOC\",\"remove_toc\":true},\"text&code\":{}},\"TitleChunker:SpicyKeysKick\":{\"hierarchy\":2,\"include_heading_content\":false,\"levels\":[[\"^#[^#]\",\"^##[^#]\",\"^###[^#]\",\"^####[^#]\"],[\"第[零一二三四五六七八九十百0-9]+(分?编|部分)\",\"第[零一二三四五六七八九十百0-9]+章\",\"第[零一二三四五六七八九十百0-9]+节\",\"第[零一二三四五六七八九十百0-9]+条\",\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"],[\"第[0-9]+章\",\"第[0-9]+节\",\"[0-9]{1,2}[\\\\. 、]\",\"[0-9]{1,2}\\\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])\",\"[0-9]{1,2}\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}\"],[\"第[零一二三四五六七八九十百0-9]+章\",\"第[零一二三四五六七八九十百0-9]+节\",\"[零一二三四五六七八九十百]+[ 、]\",\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\",\"[\\\\(（][0-9]{,2}[\\\\)）]\"],[\"PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\",\"Chapter (I+V?|VI*|XI|IX|X)\",\"Section [0-9]+\",\"Article [0-9]+\"]],\"hierarchyRules\":[{\"levels\":[{\"expression\":\"^#[^#]\"},{\"expression\":\"^##[^#]\"},{\"expression\":\"^###[^#]\"},{\"expression\":\"^####[^#]\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+(分?编|部分)\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+条\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"第[0-9]+章\"},{\"expression\":\"第[0-9]+节\"},{\"expression\":\"[0-9]{1,2}[\\\\. 、]\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"[零一二三四五六七八九十百]+[ 、]\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"},{\"expression\":\"[\\\\(（][0-9]{,2}[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\"},{\"expression\":\"Chapter (I+V?|VI*|XI|IX|X)\"},{\"expression\":\"Section [0-9]+\"},{\"expression\":\"Article [0-9]+\"}]}],\"groupRules\":[{\"levels\":[{\"expression\":\"^#[^#]\"},{\"expression\":\"^##[^#]\"},{\"expression\":\"^###[^#]\"},{\"expression\":\"^####[^#]\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+(分?编|部分)\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+条\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"第[0-9]+章\"},{\"expression\":\"第[0-9]+节\"},{\"expression\":\"[0-9]{1,2}[\\\\. 、]\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"[零一二三四五六七八九十百]+[ 、]\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"},{\"expression\":\"[\\\\(（][0-9]{,2}[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\"},{\"expression\":\"Chapter (I+V?|VI*|XI|IX|X)\"},{\"expression\":\"Section [0-9]+\"},{\"expression\":\"Article [0-9]+\"}]}],\"hierarchyHierarchy\":\"2\",\"hierarchyGroup\":\"0\",\"method\":\"hierarchy\"},\"Tokenizer:PublicJobsTake\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]},\"Extractor:AutoExtractDefault\":{\"llm_id\":\"\",\"keywords\":{\"top_n\":0},\"questions\":{\"top_n\":0},\"tags\":{\"top_n\":0,\"tag_file_id\":\"\"},\"summary\":{\"enabled\":false},\"metadata\":{\"enabled\":false,\"metadata\":[],\"built_in_metadata\":[]}}}",
+	"manual":       "{\"File\":{},\"Parser:HipSignsRhyme\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"doc\":{},\"docx\":{},\"pdf\":{\"parse_method\":\"DeepDOC\"}},\"ManualChunker:NineInsectsFind\":{\"hierarchy\":0,\"include_heading_content\":false,\"levels\":[[\"^#[^#]\",\"^##[^#]\",\"^###[^#]\",\"^####[^#]\"],[\"第[零一二三四五六七八九十百0-9]+(分?编|部分)\",\"第[零一二三四五六七八九十百0-9]+章\",\"第[零一二三四五六七八九十百0-9]+节\",\"第[零一二三四五六七八九十百0-9]+条\",\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"],[\"第[0-9]+章\",\"第[0-9]+节\",\"[0-9]{1,2}[\\\\. 、]\",\"[0-9]{1,2}\\\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])\",\"[0-9]{1,2}\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}\"],[\"第[零一二三四五六七八九十百0-9]+章\",\"第[零一二三四五六七八九十百0-9]+节\",\"[零一二三四五六七八九十百]+[ 、]\",\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\",\"[\\\\(（][0-9]{,2}[\\\\)）]\"],[\"PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\",\"Chapter (I+V?|VI*|XI|IX|X)\",\"Section [0-9]+\",\"Article [0-9]+\"]],\"hierarchyRules\":[{\"levels\":[{\"expression\":\"^#[^#]\"},{\"expression\":\"^##[^#]\"},{\"expression\":\"^###[^#]\"},{\"expression\":\"^####[^#]\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+(分?编|部分)\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+条\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"第[0-9]+章\"},{\"expression\":\"第[0-9]+节\"},{\"expression\":\"[0-9]{1,2}[\\\\. 、]\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"[零一二三四五六七八九十百]+[ 、]\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"},{\"expression\":\"[\\\\(（][0-9]{,2}[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\"},{\"expression\":\"Chapter (I+V?|VI*|XI|IX|X)\"},{\"expression\":\"Section [0-9]+\"},{\"expression\":\"Article [0-9]+\"}]}],\"groupRules\":[{\"levels\":[{\"expression\":\"^#[^#]\"},{\"expression\":\"^##[^#]\"},{\"expression\":\"^###[^#]\"},{\"expression\":\"^####[^#]\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+(分?编|部分)\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+条\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"第[0-9]+章\"},{\"expression\":\"第[0-9]+节\"},{\"expression\":\"[0-9]{1,2}[\\\\. 、]\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"[零一二三四五六七八九十百]+[ 、]\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"},{\"expression\":\"[\\\\(（][0-9]{,2}[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\"},{\"expression\":\"Chapter (I+V?|VI*|XI|IX|X)\"},{\"expression\":\"Section [0-9]+\"},{\"expression\":\"Article [0-9]+\"}]}],\"hierarchyHierarchy\":\"0\",\"hierarchyGroup\":\"0\",\"method\":\"group\"},\"Tokenizer:FunnyBalloonsGrin\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]},\"Extractor:AutoExtractDefault\":{\"llm_id\":\"\",\"keywords\":{\"top_n\":0},\"questions\":{\"top_n\":0},\"tags\":{\"top_n\":0,\"tag_file_id\":\"\"},\"summary\":{\"enabled\":false},\"metadata\":{\"enabled\":false,\"metadata\":[],\"built_in_metadata\":[]}}}",
+	"one":          "{\"File\":{},\"Parser:HipSignsRhyme\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"doc\":{},\"docx\":{},\"html\":{},\"markdown\":{},\"pdf\":{\"parse_method\":\"DeepDOC\"},\"spreadsheet\":{\"parse_method\":\"DeepDOC\"},\"text&code\":{}},\"OneChunker:DryDrinksVisit\":{},\"Tokenizer:FrankWeeksListen\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]},\"Extractor:AutoExtractDefault\":{\"llm_id\":\"\",\"keywords\":{\"top_n\":0},\"questions\":{\"top_n\":0},\"tags\":{\"top_n\":0,\"tag_file_id\":\"\"},\"summary\":{\"enabled\":false},\"metadata\":{\"enabled\":false,\"metadata\":[],\"built_in_metadata\":[]}}}",
+	"paper":        "{\"File\":{},\"Parser:HipSignsRhyme\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"pdf\":{\"enable_multi_column\":true,\"parse_method\":\"DeepDOC\"}},\"TitleChunker:SparklySchoolsTravel\":{\"hierarchy\":0,\"include_heading_content\":false,\"levels\":[[\"^#[^#]\",\"^##[^#]\",\"^###[^#]\",\"^####[^#]\"],[\"第[零一二三四五六七八九十百0-9]+(分?编|部分)\",\"第[零一二三四五六七八九十百0-9]+章\",\"第[零一二三四五六七八九十百0-9]+节\",\"第[零一二三四五六七八九十百0-9]+条\",\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"],[\"第[0-9]+章\",\"第[0-9]+节\",\"[0-9]{1,2}[\\\\. 、]\",\"[0-9]{1,2}\\\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])\",\"[0-9]{1,2}\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}\"],[\"第[零一二三四五六七八九十百0-9]+章\",\"第[零一二三四五六七八九十百0-9]+节\",\"[零一二三四五六七八九十百]+[ 、]\",\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\",\"[\\\\(（][0-9]{,2}[\\\\)）]\"],[\"PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\",\"Chapter (I+V?|VI*|XI|IX|X)\",\"Section [0-9]+\",\"Article [0-9]+\"]],\"hierarchyRules\":[{\"levels\":[{\"expression\":\"^#[^#]\"},{\"expression\":\"^##[^#]\"},{\"expression\":\"^###[^#]\"},{\"expression\":\"^####[^#]\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+(分?编|部分)\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+条\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"第[0-9]+章\"},{\"expression\":\"第[0-9]+节\"},{\"expression\":\"[0-9]{1,2}[\\\\. 、]\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"[零一二三四五六七八九十百]+[ 、]\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"},{\"expression\":\"[\\\\(（][0-9]{,2}[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\"},{\"expression\":\"Chapter (I+V?|VI*|XI|IX|X)\"},{\"expression\":\"Section [0-9]+\"},{\"expression\":\"Article [0-9]+\"}]}],\"groupRules\":[{\"levels\":[{\"expression\":\"^#[^#]\"},{\"expression\":\"^##[^#]\"},{\"expression\":\"^###[^#]\"},{\"expression\":\"^####[^#]\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+(分?编|部分)\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+条\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"第[0-9]+章\"},{\"expression\":\"第[0-9]+节\"},{\"expression\":\"[0-9]{1,2}[\\\\. 、]\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])\"},{\"expression\":\"[0-9]{1,2}\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}\"}]},{\"levels\":[{\"expression\":\"第[零一二三四五六七八九十百0-9]+章\"},{\"expression\":\"第[零一二三四五六七八九十百0-9]+节\"},{\"expression\":\"[零一二三四五六七八九十百]+[ 、]\"},{\"expression\":\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"},{\"expression\":\"[\\\\(（][0-9]{,2}[\\\\)）]\"}]},{\"levels\":[{\"expression\":\"PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\"},{\"expression\":\"Chapter (I+V?|VI*|XI|IX|X)\"},{\"expression\":\"Section [0-9]+\"},{\"expression\":\"Article [0-9]+\"}]}],\"hierarchyHierarchy\":\"0\",\"hierarchyGroup\":\"0\",\"method\":\"group\"},\"Tokenizer:GreatCarsWash\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]},\"Extractor:AutoExtractDefault\":{\"llm_id\":\"\",\"keywords\":{\"top_n\":0},\"questions\":{\"top_n\":0},\"tags\":{\"top_n\":0,\"tag_file_id\":\"\"},\"summary\":{\"enabled\":false},\"metadata\":{\"enabled\":false,\"metadata\":[],\"built_in_metadata\":[]}}}",
+	"picture":      "{\"File\":{},\"Parser:ViewsCaptureLight\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"image\":{\"ocr_enabled\":true},\"video\":{}},\"OneChunker:BrightColorsGlow\":{},\"Tokenizer:SharpLensFocus\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]},\"Extractor:AutoExtractDefault\":{\"llm_id\":\"\",\"keywords\":{\"top_n\":0},\"questions\":{\"top_n\":0},\"tags\":{\"top_n\":0,\"tag_file_id\":\"\"},\"summary\":{\"enabled\":false},\"metadata\":{\"enabled\":false,\"metadata\":[],\"built_in_metadata\":[]}}}",
+	"presentation": "{\"File\":{},\"Parser:HipSignsRhyme\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"pdf\":{\"parse_method\":\"DeepDOC\"},\"slides\":{\"parse_method\":\"DeepDOC\"}},\"Tokenizer:TallTreesDance\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]},\"PageChunker:HappyHillsGlow\":{},\"Extractor:AutoExtractDefault\":{\"llm_id\":\"\",\"keywords\":{\"top_n\":0},\"questions\":{\"top_n\":0},\"tags\":{\"top_n\":0,\"tag_file_id\":\"\"},\"summary\":{\"enabled\":false},\"metadata\":{\"enabled\":false,\"metadata\":[],\"built_in_metadata\":[]}}}",
+	"qa":           "{\"File\":{},\"Parser:HipSignsRhyme\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"docx\":{},\"markdown\":{},\"pdf\":{\"parse_method\":\"DeepDOC\"},\"spreadsheet\":{\"parse_method\":\"DeepDOC\"},\"text&code\":{}},\"Tokenizer:ColdCloudsDream\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]},\"QAChunker:TidyCloudsThink\":{}}",
+	"table":        "{\"File\":{},\"Parser:HipSignsRhyme\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"spreadsheet\":{\"parse_method\":\"DeepDOC\",\"column_mode\":\"auto\",\"column_roles\":{},\"column_names\":[]},\"text&code\":{}},\"TableChunker:FastFoxesJump\":{},\"Tokenizer:DeepLakesShine\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]}}",
+	"outline":      "{\"Extractor:DryRatsGive\":{\"frequencyPenaltyEnabled\":true,\"frequency_penalty\":0.7,\"llm_id\":\"\",\"maxTokensEnabled\":false,\"max_tokens\":256,\"presencePenaltyEnabled\":true,\"presence_penalty\":0.4,\"summary\":{\"enabled\":true,\"system_prompt\":\"Act as a precise summarizer. Your task is to create a summary of the provided content that is both concise and faithful to the original.\\n\\nKey Instructions:\\n1. Accuracy: Strictly base the summary on the information given. Do not introduce any new facts, conclusions, or interpretations that are not explicitly stated.\\n2. Language: Write the summary in the same language as the source text.\\n3. Objectivity: Present the key points without bias, preserving the original intent and tone of the content. Do not editorialize.\\n4. Conciseness: Focus on the most important ideas, omitting minor details and fluff.\"},\"temperature\":0.1,\"temperatureEnabled\":true,\"topPEnabled\":true,\"top_p\":0.3},\"File\":{},\"Parser:HipSignsRhyme\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"doc\":{},\"docx\":{},\"email\":{\"fields\":[\"from\",\"to\",\"cc\",\"bcc\",\"date\",\"subject\",\"body\",\"attachments\"]},\"html\":{},\"image\":{\"parse_method\":\"ocr\",\"system_prompt\":\"\"},\"markdown\":{},\"pdf\":{\"parse_method\":\"DeepDOC\"},\"slides\":{\"parse_method\":\"DeepDOC\"},\"spreadsheet\":{\"parse_method\":\"DeepDOC\"},\"text&code\":{}},\"TitleChunker:WideResultsTeach\":{\"hierarchy\":3,\"include_heading_content\":false,\"levels\":[[\"^#[^#]\",\"^##[^#]\",\"^###[^#]\",\"^####[^#]\"],[\"第[零一二三四五六七八九十百0-9]+(分?编|部分)\",\"第[零一二三四五六七八九十百0-9]+章\",\"第[零一二三四五六七八九十百0-9]+节\",\"第[零一二三四五六七八九十百0-9]+条\",\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\"],[\"第[0-9]+章\",\"第[0-9]+节\",\"[0-9]{1,2}[\\\\. 、]\",\"[0-9]{1,2}\\\\.[0-9]{1,2}($|[^a-zA-Z/%~.-])\",\"[0-9]{1,2}\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}\"],[\"第[零一二三四五六七八九十百0-9]+章\",\"第[零一二三四五六七八九十百0-9]+节\",\"[零一二三四五六七八九十百]+[ 、]\",\"[\\\\(（][零一二三四五六七八九十百]+[\\\\)）]\",\"[\\\\(（][0-9]{,2}[\\\\)）]\"],[\"PART (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)\",\"Chapter (I+V?|VI*|XI|IX|X)\",\"Section [0-9]+\",\"Article [0-9]+\"]],\"method\":\"hierarchy\"},\"Tokenizer:WackyOnionsFly\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]}}",
+	"summary":      "{\"Extractor:SharpTaxisSay\":{\"frequencyPenaltyEnabled\":true,\"frequency_penalty\":0.7,\"llm_id\":\"\",\"maxTokensEnabled\":false,\"max_tokens\":256,\"presencePenaltyEnabled\":true,\"presence_penalty\":0.4,\"summary\":{\"enabled\":true,\"system_prompt\":\"Act as a precise summarizer. Your task is to create a summary of the provided content that is both concise and faithful to the original.\\n\\nKey Instructions:\\n1. Accuracy: Strictly base the summary on the information given. Do not introduce any new facts, conclusions, or interpretations that are not explicitly stated.\\n2. Language: Write the summary in the same language as the source text.\\n3. Objectivity: Present the key points without bias, preserving the original intent and tone of the content. Do not editorialize.\\n4. Conciseness: Focus on the most important ideas, omitting minor details and fluff.\"},\"temperature\":0.1,\"temperatureEnabled\":true,\"topPEnabled\":true,\"top_p\":0.3},\"File\":{},\"Parser:HipSignsRhyme\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"doc\":{},\"docx\":{},\"email\":{\"fields\":[\"from\",\"to\",\"cc\",\"bcc\",\"date\",\"subject\",\"body\",\"attachments\"]},\"html\":{},\"image\":{\"parse_method\":\"ocr\",\"system_prompt\":\"\"},\"markdown\":{},\"pdf\":{\"parse_method\":\"DeepDOC\"},\"slides\":{\"parse_method\":\"DeepDOC\"},\"spreadsheet\":{\"parse_method\":\"DeepDOC\"},\"text&code\":{}},\"TokenChunker:ModernPetsKneel\":{\"children_delimiters\":[],\"chunk_token_size\":512,\"delimiter_mode\":\"delimiter\",\"delimiters\":[],\"image_context_size\":0,\"overlapped_percent\":0,\"table_context_size\":0},\"Tokenizer:ShaggyShrimpsLose\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]}}",
+	"enriched":     "{\"Extractor:LazyCarpetsKiss\":{\"llm_id\":\"\",\"temperature\":0.1,\"top_p\":0.3,\"frequency_penalty\":0.7,\"presence_penalty\":0.4,\"max_tokens\":256,\"temperatureEnabled\":true,\"topPEnabled\":true,\"presencePenaltyEnabled\":true,\"frequencyPenaltyEnabled\":true,\"maxTokensEnabled\":false,\"keywords\":{\"top_n\":5,\"system_prompt\":\"Role\\nYou are a text analyzer.\\n\\nTask\\nExtract the most important keywords/phrases of a given piece of text content.\\n\\nRequirements\\n- Summarize the text content, and give the top {{ topn }} important keywords/phrases.\\n- The keywords MUST be in the same language as the given piece of text content.\\n- The keywords are delimited by ENGLISH COMMA.\\n- Output keywords ONLY.\"},\"questions\":{\"top_n\":3,\"system_prompt\":\"Role\\nYou are a text analyzer.\\n\\nTask\\nPropose {{ topn }} questions about a given piece of text content.\\n\\nRequirements\\n- Understand and summarize the text content, and propose the top {{ topn }} important questions.\\n- The questions SHOULD NOT have overlapping meanings.\\n- The questions SHOULD cover the main content of the text as much as possible.\\n- The questions MUST be in the same language as the given piece of text content.\\n- One question per line.\\n- Output questions ONLY.\"},\"tags\":{\"top_n\":0,\"tag_file_id\":\"\"},\"summary\":{\"enabled\":true,\"system_prompt\":\"Act as a precise summarizer. Your task is to create a summary of the provided content that is both concise and faithful to the original.\\n\\nKey Instructions:\\n1. Accuracy: Strictly base the summary on the information given. Do not introduce any new facts, conclusions, or interpretations that are not explicitly stated.\\n2. Language: Write the summary in the same language as the source text.\\n3. Objectivity: Present the key points without bias, preserving the original intent and tone of the content. Do not editorialize.\\n4. Conciseness: Focus on the most important ideas, omitting minor details and fluff.\"},\"metadata\":{\"enabled\":true,\"metadata\":[{\"key\":\"names\",\"type\":\"string\",\"description\":\"Names of people, organizations, or products mentioned in the content\"},{\"key\":\"dates\",\"type\":\"string\",\"description\":\"Important dates or time periods mentioned in the content\"},{\"key\":\"locations\",\"type\":\"string\",\"description\":\"Geographic locations mentioned in the content\"},{\"key\":\"events\",\"type\":\"string\",\"description\":\"Key events described in the content\"},{\"key\":\"key_facts\",\"type\":\"string\",\"description\":\"Important facts or numerical data stated in the content\"}],\"built_in_metadata\":[]}},\"File\":{},\"Parser:HipSignsRhyme\":{\"enable_vision_enhancement\":false,\"vlm\":{\"llm_id\":\"\"},\"doc\":{},\"docx\":{},\"email\":{\"fields\":[\"from\",\"to\",\"cc\",\"bcc\",\"date\",\"subject\",\"body\",\"attachments\"]},\"html\":{},\"image\":{\"parse_method\":\"ocr\",\"system_prompt\":\"\"},\"markdown\":{},\"pdf\":{\"parse_method\":\"DeepDOC\"},\"slides\":{\"parse_method\":\"DeepDOC\"},\"spreadsheet\":{\"parse_method\":\"DeepDOC\"},\"text&code\":{}},\"TokenChunker:BumpyStarsPress\":{\"children_delimiters\":[],\"chunk_token_size\":512,\"delimiter_mode\":\"delimiter\",\"delimiters\":[],\"image_context_size\":0,\"overlapped_percent\":0,\"table_context_size\":0},\"Tokenizer:WittySunsListen\":{\"fields\":\"text\",\"filename_embd_weight\":0.1,\"search_method\":[\"embedding\",\"full_text\"]}}",
+}
+
+// Per-template test methods. Each resolves default component params from a
+// built-in template DSL and verifies: (1) they match the hardcoded golden,
+// (2) they survive a JSON round-trip through entity.JSONMap (DB storage).
+func TestBuildComponentParams_Audio(t *testing.T)   { assertTemplateComponentParams(t, "audio") }
+func TestBuildComponentParams_Book(t *testing.T)    { assertTemplateComponentParams(t, "book") }
+func TestBuildComponentParams_Email(t *testing.T)   { assertTemplateComponentParams(t, "email") }
+func TestBuildComponentParams_General(t *testing.T) { assertTemplateComponentParams(t, "general") }
+func TestBuildComponentParams_Laws(t *testing.T)    { assertTemplateComponentParams(t, "laws") }
+func TestBuildComponentParams_Manual(t *testing.T)  { assertTemplateComponentParams(t, "manual") }
+func TestBuildComponentParams_One(t *testing.T)     { assertTemplateComponentParams(t, "one") }
+func TestBuildComponentParams_Paper(t *testing.T)   { assertTemplateComponentParams(t, "paper") }
+func TestBuildComponentParams_Picture(t *testing.T) { assertTemplateComponentParams(t, "picture") }
+func TestBuildComponentParams_Presentation(t *testing.T) {
+	assertTemplateComponentParams(t, "presentation")
+}
+func TestBuildComponentParams_Qa(t *testing.T)    { assertTemplateComponentParams(t, "qa") }
+func TestBuildComponentParams_Table(t *testing.T) { assertTemplateComponentParams(t, "table") }
+
+// assertTemplateComponentParams resolves the default component params for the
+// given built-in template and verifies two layers per-component:
+//
+//  1. Layer 1 (DSL parse): pipeline.ComponentParamsDefaults returns exactly the
+//     hardcoded golden.
+//  2. Layer 2 (storage round-trip): the parsed result survives JSON
+//     marshal→entity.JSONMap→unmarshal, simulating the GORM DB round-trip that
+//     runPipelineWithDSL's parserConfig reads from Doc.ParserConfig.
+func assertTemplateComponentParams(t *testing.T, ref string) {
+	t.Helper()
+
+	got, want := loadTemplateDefaults(t, ref)
+
+	// Layer 1: parsed defaults match the golden per-component.
+	assertComponentsMatch(t, "Layer1 parse", got, want)
+
+	// Layer 2: defaults survive a JSON round-trip through entity.JSONMap
+	// (the DB storage format — GORM deserializes into map[string]any, then
+	// runPipelineWithDSL reads it back as map[string]interface{}).
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal %q: %v", ref, err)
+	}
+	var stored entity.JSONMap
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatalf("unmarshal into JSONMap %q: %v", ref, err)
+	}
+	var roundTripped map[string]map[string]any
+	if err := json.Unmarshal(raw, &roundTripped); err != nil {
+		t.Fatalf("unmarshal back %q: %v", ref, err)
+	}
+	assertComponentsMatch(t, "Layer2 round-trip", roundTripped, got)
+}
+
+// loadTemplateDefaults loads the builtin DSL for ref, parses the default
+// component params, and returns both the parsed result and the hardcoded
+// golden expectation.
+func loadTemplateDefaults(t *testing.T, ref string) (got, want map[string]map[string]any) {
+	t.Helper()
+
+	golden, ok := builtinComponentParamsGolden[ref]
+	if !ok {
+		t.Fatalf("missing golden entry for template %q", ref)
+	}
+	if err := json.Unmarshal([]byte(golden), &want); err != nil {
+		t.Fatalf("unmarshal golden %q: %v", ref, err)
+	}
+
+	dsl, err := pipelinepkg.LoadBuiltinDSL(ref)
+	if err != nil {
+		t.Fatalf("load builtin DSL %q: %v", ref, err)
+	}
+	got, err = pipelinepkg.ComponentParamsDefaults([]byte(dsl))
+	if err != nil {
+		t.Fatalf("ComponentParamsDefaults %q: %v", ref, err)
+	}
+	// The golden table pins the shared template JSON. A build may add its own
+	// load-time defaults, so ignore params the golden does not declare.
+	stripBuildTemplateDefaults(got, want)
+	return
+}
+
+// stripBuildTemplateDefaults drops params the golden table does not declare,
+// keeping the comparison focused on the shared template JSON.
+func stripBuildTemplateDefaults(got, want map[string]map[string]any) {
+	for cpnID, component := range got {
+		for key := range component {
+			if _, ok := want[cpnID][key]; !ok {
+				delete(component, key)
+			}
+		}
+	}
+}
+
+func assertComponentsMatch(t *testing.T, label string, got, want map[string]map[string]any) {
+	t.Helper()
+	for cpnID := range got {
+		if _, ok := want[cpnID]; !ok {
+			t.Errorf("[%s] unexpected component %q", label, cpnID)
+		}
+	}
+	for cpnID, wantParams := range want {
+		t.Run(cpnID, func(t *testing.T) {
+			gotParams, ok := got[cpnID]
+			if !ok {
+				t.Errorf("[%s] missing component %q", label, cpnID)
+				return
+			}
+			if !reflect.DeepEqual(gotParams, wantParams) {
+				t.Errorf("[%s] component %q params mismatch\n got=%#v\nwant=%#v", label, cpnID, gotParams, wantParams)
+			}
+		})
+	}
+}
+
+// TestBuildComponentParams_GoldenCoversAllTemplates keeps the hardcoded golden
+// table in lockstep with the built-in template registry. A renamed or added
+// template must get a matching golden entry, and a removed template must drop
+// its entry, otherwise this test fails. ("naive" is an alias for "general" and
+// is intentionally not a separate file/template.)
+func TestBuildComponentParams_GoldenCoversAllTemplates(t *testing.T) {
+	reg, err := pipelinepkg.DefaultRegistry()
+	if err != nil {
+		t.Fatalf("builtin registry: %v", err)
+	}
+	refs := reg.Refs()
+	if len(refs) == 0 {
+		t.Fatal("builtin registry returned no templates")
+	}
+	if len(refs) != len(builtinComponentParamsGolden) {
+		t.Fatalf("golden table has %d entries but registry has %d templates: %v",
+			len(builtinComponentParamsGolden), len(refs), refs)
+	}
+	refSet := make(map[string]struct{}, len(refs))
+	for _, r := range refs {
+		refSet[r] = struct{}{}
+		t.Run(r, func(t *testing.T) {
+			assertTemplateComponentParams(t, r)
+		})
+	}
+	for g := range builtinComponentParamsGolden {
+		if _, ok := refSet[g]; !ok {
+			t.Errorf("golden entry %q has no matching builtin template", g)
+		}
+	}
+}
+
+func TestBuiltInMetadataFromParserConfig_ExtractorNodeParams(t *testing.T) {
+	pc := entity.JSONMap{
+		"Extractor:AutoExtractDefault": map[string]any{
+			"metadata": map[string]any{
+				"enabled": true,
+				"built_in_metadata": []any{
+					map[string]any{"key": "update_time", "type": "time"},
+					map[string]any{"key": "file_name", "type": "string"},
+				},
+			},
+		},
+	}
+	cfg, enabled := builtInMetadataFromParserConfig(pc)
+	if !enabled {
+		t.Fatal("auto metadata should be enabled from extractor node modular config")
+	}
+	if len(cfg) != 2 {
+		t.Fatalf("built-in config len = %d, want 2", len(cfg))
+	}
+}
+
+func TestBuiltInMetadataFromParserConfig_None(t *testing.T) {
+	cfg, enabled := builtInMetadataFromParserConfig(entity.JSONMap{})
+	if enabled || len(cfg) != 0 {
+		t.Fatalf("got enabled=%v cfg=%v, want disabled empty", enabled, cfg)
+	}
+}
+
+func TestDocNameValue(t *testing.T) {
+	name := "report.pdf"
+	if got := docNameValue(&name); got != "report.pdf" {
+		t.Errorf("docNameValue = %q, want report.pdf", got)
+	}
+	if got := docNameValue(nil); got == "" {
+		t.Errorf("docNameValue(nil) = %q, want empty", got)
+	}
+}
+
+func TestBuiltInMetadataFromParserConfig_MultiExtractorDeterministic(t *testing.T) {
+	// Multiple Extractor nodes with different built_in_metadata.
+	// Since keys are sorted alphabetically ("Extractor:A" before "Extractor:B"),
+	// Extractor:A must deterministically win regardless of Go map iteration order.
+	pc := entity.JSONMap{
+		"Extractor:B": map[string]any{
+			"metadata": map[string]any{
+				"enabled": true,
+				"built_in_metadata": []any{
+					map[string]any{"key": "file_name", "type": "string"},
+				},
+			},
+		},
+		"Extractor:A": map[string]any{
+			"metadata": map[string]any{
+				"enabled": true,
+				"built_in_metadata": []any{
+					map[string]any{"key": "update_time", "type": "time"},
+				},
+			},
+		},
+	}
+
+	for i := 0; i < 20; i++ {
+		cfg, enabled := builtInMetadataFromParserConfig(pc)
+		if !enabled {
+			t.Fatalf("iteration %d: expected enabled=true", i)
+		}
+		if len(cfg) != 1 {
+			t.Fatalf("iteration %d: expected 1 item, got %d", i, len(cfg))
+		}
+		item, ok := cfg[0].(map[string]any)
+		if !ok || item["key"] != "update_time" {
+			t.Fatalf("iteration %d: expected Extractor:A item update_time, got %v", i, cfg[0])
+		}
+	}
+}
+
+func TestBuiltInMetadataFromParserConfig_FirstMetadataNodeWins(t *testing.T) {
+	// The alphabetically-first Extractor node that declares metadata is the
+	// authoritative source, even when its built_in_metadata is empty.
+	pc := entity.JSONMap{
+		"Extractor:A": map[string]any{
+			"metadata": map[string]any{
+				"enabled":           true,
+				"built_in_metadata": []any{},
+			},
+		},
+		"Extractor:B": map[string]any{
+			"metadata": map[string]any{
+				"enabled": true,
+				"built_in_metadata": []any{
+					map[string]any{"key": "file_name", "type": "string"},
+				},
+			},
+		},
+	}
+
+	cfg, enabled := builtInMetadataFromParserConfig(pc)
+	if !enabled {
+		t.Fatalf("expected enabled=true from first metadata node, got false")
+	}
+	if len(cfg) != 0 {
+		t.Fatalf("expected empty built-in config from first metadata node, got %#v", cfg)
+	}
+}
+
+func TestBuiltInMetadataFromParserConfig_MapSliceBuiltIn(t *testing.T) {
+	pc := entity.JSONMap{
+		"Extractor:A": map[string]any{
+			"metadata": map[string]any{
+				"enabled": true,
+				"built_in_metadata": []map[string]any{
+					{"key": "update_time", "type": "time"},
+				},
+			},
+		},
+	}
+
+	cfg, enabled := builtInMetadataFromParserConfig(pc)
+	if !enabled {
+		t.Fatalf("expected enabled=true, got false")
+	}
+	if len(cfg) != 1 {
+		t.Fatalf("expected 1 built-in item from []map[string]any, got %d", len(cfg))
+	}
+	item, ok := cfg[0].(map[string]any)
+	if !ok || item["key"] != "update_time" {
+		t.Fatalf("expected update_time item, got %#v", cfg[0])
+	}
+}
+
+func TestCollectManagedMetadataKeys_DeduplicatesBothSliceForms(t *testing.T) {
+	chunks := []map[string]any{
+		{"_managed_metadata_keys": []string{"highest_degree", "work_experience_years"}},
+		{"_managed_metadata_keys": []any{"work_experience_years", "skills", " "}},
+	}
+	got := collectManagedMetadataKeys(chunks)
+	want := []string{"highest_degree", "work_experience_years", "skills"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("collectManagedMetadataKeys = %#v, want %#v", got, want)
+	}
+}

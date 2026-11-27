@@ -1,0 +1,189 @@
+import { CardContainer } from '@/components/card-container';
+import { EmptyCardType } from '@/components/empty/constant';
+import { EmptyAppCard } from '@/components/empty/empty';
+import { NavGroupListFilterBar } from '@/layouts/components/nav-group-list-filter-bar';
+import { PrivilegeManagementDialog } from '@/ee/components/privilege-management/privilege-management-dialog';
+import { Button } from '@/components/ui/button';
+import { RAGFlowPagination } from '@/components/ui/ragflow-pagination';
+import { ListDeletionKey } from '@/constants/list-deletion';
+import { useTranslate } from '@/hooks/common-hooks';
+import { useGoToPreviousPageOnEmpty } from '@/hooks/logic-hooks';
+import { pick } from 'lodash';
+import { Plus } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router';
+import { AddOrEditModal } from './add-or-edit-modal';
+import { defaultMemoryFields } from './constants';
+import {
+  useFetchMemoryFilters,
+  useFetchMemoryList,
+  useRenameMemory,
+  useSelectFilters,
+} from './hooks';
+import { ICreateMemoryProps, IMemory } from './interface';
+import { MemoryCard } from './memory-card';
+import { useShowPrivilegeDialog } from '@/ee/pages/memories/use-show-privilege-dialog';
+import { useCanCreateMemory } from '@/ee/pages/memories/memory-dropdown-guard';
+
+export default function MemoryList() {
+  const canCreateMemory = useCanCreateMemory();
+  // const { data } = useFetchFlowList();
+  const { t } = useTranslate('memories');
+  const [addOrEditType, setAddOrEditType] = useState<'add' | 'edit'>('add');
+  // const [isEdit, setIsEdit] = useState(false);
+  const {
+    data: list,
+    isLoading,
+    pagination,
+    searchString,
+    setSearchString,
+    handleInputChange,
+    setPagination,
+    refetch: refetchList,
+    filterValue,
+    setFilterValue,
+    handleFilterSubmit,
+  } = useFetchMemoryList();
+  const { data: filterData } = useFetchMemoryFilters();
+
+  const {
+    openCreateModal,
+    showMemoryRenameModal,
+    hideMemoryModal,
+    memoryRenameLoading,
+    onMemoryRenameOk,
+    initialMemory,
+  } = useRenameMemory();
+  const {
+    privilegeModalVisible,
+    hidePrivilegeModal,
+    handShowPrivilegeModal,
+    recordWithSourceType,
+  } = useShowPrivilegeDialog();
+
+  const onMemoryConfirm = (data: ICreateMemoryProps) => {
+    onMemoryRenameOk(data, () => {
+      refetchList();
+    });
+  };
+  const openCreateModalFun = useCallback(() => {
+    // setIsEdit(false);
+    setAddOrEditType('add');
+    showMemoryRenameModal(defaultMemoryFields as unknown as IMemory);
+  }, [showMemoryRenameModal]);
+  const handlePageChange = useCallback(
+    (page: number, pageSize?: number) => {
+      setPagination({ page, pageSize });
+    },
+    [setPagination],
+  );
+  useGoToPreviousPageOnEmpty(list?.data?.memory_list?.length, isLoading, {
+    deletionKey: ListDeletionKey.MemoryList,
+    searchString,
+    setSearchString,
+    filterValue,
+    setFilterValue,
+  });
+
+  const [searchUrl, setMemoryUrl] = useSearchParams();
+  const { filters } = useSelectFilters(filterData);
+  const isCreate = searchUrl.get('isCreate') === 'true';
+  useEffect(() => {
+    if (isCreate) {
+      openCreateModalFun();
+      searchUrl.delete('isCreate');
+      setMemoryUrl(searchUrl);
+    }
+  }, [isCreate, openCreateModalFun, searchUrl, setMemoryUrl]);
+
+  return (
+    <>
+      <article
+        className="size-full min-w-0 flex flex-col"
+        data-testid="memory-list"
+      >
+        <header className="mb-5 min-w-0 px-5 pt-5">
+          <NavGroupListFilterBar
+            onSearchChange={handleInputChange}
+            searchString={searchString}
+            filters={filters}
+            onChange={handleFilterSubmit}
+            value={filterValue}
+          >
+            {canCreateMemory && (
+              <Button
+                size="icon"
+                onClick={openCreateModalFun}
+                aria-label={t('createMemory')}
+              >
+                <Plus />
+              </Button>
+            )}
+          </NavGroupListFilterBar>
+        </header>
+
+        {list?.data?.memory_list?.length ? (
+          <>
+            <CardContainer className="flex-1 overflow-auto px-5">
+              {list?.data.memory_list.map((x) => (
+                <MemoryCard
+                  key={x.id}
+                  data={x}
+                  showMemoryRenameModal={() => {
+                    setAddOrEditType('edit');
+                    showMemoryRenameModal(x);
+                  }}
+                  showPrivilegeModal={handShowPrivilegeModal(x)}
+                />
+              ))}
+            </CardContainer>
+
+            <footer className="mt-4 px-5 pb-5">
+              <RAGFlowPagination
+                {...pick(pagination, 'current', 'pageSize')}
+                total={list?.data.total_count}
+                onChange={handlePageChange}
+              />
+            </footer>
+          </>
+        ) : (
+          <div className="flex flex-1 items-center justify-center px-5">
+            <EmptyAppCard
+              showIcon
+              size="large"
+              className={searchString ? undefined : 'w-[480px] p-14'}
+              isSearch={Boolean(searchString)}
+              type={EmptyCardType.Memory}
+              onClick={canCreateMemory ? openCreateModalFun : undefined}
+            />
+          </div>
+        )}
+      </article>
+      {/* {openCreateModal && (
+        <RenameDialog
+          hideModal={hideMemoryRenameModal}
+          onOk={onMemoryRenameConfirm}
+          initialName={initialMemoryName}
+          loading={searchRenameLoading}
+          title={<HomeIcon name="memory" width={'24'} />}
+        ></RenameDialog>
+      )} */}
+      {openCreateModal && (
+        <AddOrEditModal
+          initialMemory={initialMemory}
+          isCreate={addOrEditType === 'add'}
+          open={openCreateModal}
+          loading={memoryRenameLoading}
+          onClose={hideMemoryModal}
+          onSubmit={onMemoryConfirm}
+        />
+      )}
+      {privilegeModalVisible && (
+        <PrivilegeManagementDialog
+          hideModal={hidePrivilegeModal}
+          initialValues={recordWithSourceType}
+        />
+      )}
+    </>
+  );
+}

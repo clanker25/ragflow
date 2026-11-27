@@ -1,0 +1,56 @@
+import { ModelTreeSelect, ModelTypeMap } from '@/components/model-tree-select';
+import { Spin } from '@/components/ui/spin';
+import { useTranslate } from '@/hooks/common-hooks';
+import { useCheckKbEmbedding } from '@/hooks/use-knowledge-request';
+import { cn } from '@/lib/utils';
+import { FieldValues } from 'react-hook-form';
+
+export const EmbeddingSelect = ({
+  isEdit,
+  field,
+  disabled = false,
+  testId,
+  resourceTenantId,
+  accessUserId,
+}: {
+  isEdit: boolean;
+  field: FieldValues;
+  disabled?: boolean;
+  testId?: string;
+  resourceTenantId?: string;
+  accessUserId?: string;
+}) => {
+  const { t } = useTranslate('knowledgeConfiguration');
+  const { checkKbEmbedding, checking } = useCheckKbEmbedding();
+
+  return (
+    <div className="space-y-1.5">
+      <ModelTreeSelect
+        modelTypes={ModelTypeMap.embd_id}
+        onChange={async (value) => {
+          const oldValue = field.value;
+          field.onChange(value);
+          if (isEdit && disabled && value.trim()) {
+            const res = await checkKbEmbedding(value);
+            if (res?.code !== 0) {
+              field.onChange(oldValue);
+            }
+          }
+        }}
+        resourceTenantId={resourceTenantId}
+        accessUserId={accessUserId}
+        disabled={(disabled && !isEdit) || checking}
+        value={field.value}
+        placeholder={t('embeddingModelPlaceholder')}
+        testId={testId}
+        className={cn({ 'opacity-60': checking })}
+      />
+      {checking && (
+        <div className="flex items-center gap-2 text-sm text-text-secondary">
+          <Spin size="small" />
+          {t('checkingEmbedding')}
+        </div>
+      )}
+    </div>
+  );
+};

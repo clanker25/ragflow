@@ -1,0 +1,47 @@
+import { LargeModelFormFieldWithoutFilter } from '@/components/large-model-form-field';
+import { LlmSettingSchema } from '@/components/llm-setting-items/next';
+import { Form } from '@/components/ui/form';
+import { useFetchChat } from '@/hooks/use-chat-request';
+import {
+  ModelResourceAccessUserIdContext,
+  ModelResourceTenantIdContext,
+} from '@/hooks/use-llm-request';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { isEmpty } from 'lodash';
+import { useEffect } from 'react';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+
+export function LLMSelectForm() {
+  const FormSchema = z.object(LlmSettingSchema);
+  const { data, loading } = useFetchChat();
+
+  const form = useForm<z.infer<typeof FormSchema>>({
+    resolver: zodResolver(FormSchema),
+    defaultValues: {
+      llm_id: '',
+    },
+  });
+
+  // const values = useWatch({ control: form.control, name: ['llm_id'] });
+
+  useEffect(() => {
+    if (!isEmpty(data)) {
+      form.reset({ llm_id: data.llm_id, ...data.llm_setting });
+    }
+  }, [data, form]);
+
+  return (
+    <Form {...form}>
+      <ModelResourceTenantIdContext.Provider value={data?.tenant_id}>
+        <ModelResourceAccessUserIdContext.Provider
+          value={loading ? null : (data?.user_id ?? null)}
+        >
+          <LargeModelFormFieldWithoutFilter
+            resourceTenantId={data?.tenant_id}
+          ></LargeModelFormFieldWithoutFilter>
+        </ModelResourceAccessUserIdContext.Provider>
+      </ModelResourceTenantIdContext.Provider>
+    </Form>
+  );
+}
